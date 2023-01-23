@@ -13,8 +13,7 @@ BACKEND_BASE = "noflight.monad.fi/backend"
 
 game_id = None
 
-coordinates = []
-directions = []
+route = []
 
 def on_message(ws: websocket.WebSocketApp, message):
     [action, payload] = json.loads(message)
@@ -42,19 +41,9 @@ def on_open(ws: websocket.WebSocketApp):
 def on_close(ws, close_status_code, close_msg):
     print("CLOSED")
 
-route = []
-
 # Change this to your own implementation
 def generate_commands(game_state):
     global route
-    global coordinates
-    global directions
-
-    if(len(coordinates) != 0):
-        real = [game_state["aircrafts"][0]["position"]["x"], game_state["aircrafts"][0]["position"]["y"]]
-        calculated = [coordinates[0][0], coordinates[0][1]]
-        coordinates = coordinates[1:]
-        directions = directions[1:]
 
     if(len(route) == 0):
         generate_route(game_state)
@@ -72,12 +61,8 @@ def generate_commands(game_state):
 
     return commands
 
-# best_routes [[distance, steps, x1, y1, ...], [], []]
-
 def generate_route(game_state):
     global route
-    global coordinates
-    global directions
 
     box_x_min = -180
     box_x_max = 180
@@ -152,11 +137,9 @@ def generate_route(game_state):
     y = start_y
     best_route = best_routes[-1]
 
-    coordinates = best_route[2:]
     current_direction = start_direction
     for i in range(2, len(best_route)):
         new_direction = calculate_direction(x, y, best_route[i][0], best_route[i][1])
-        directions.append(new_direction)
         route_direction = new_direction - current_direction
         if(route_direction > 180):
             route_direction -= 360
@@ -174,7 +157,6 @@ def generate_route(game_state):
         route_direction += 360
 
     route.append(route_direction)
-    directions.append(destination_direction)
 
 
 def get_rand_direction(min, max):
