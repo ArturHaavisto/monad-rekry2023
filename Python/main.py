@@ -44,120 +44,181 @@ def on_close(ws, close_status_code, close_msg):
 # Change this to your own implementation
 def generate_commands(game_state):
     global route
-
+    
     if(len(route) == 0):
+        print(game_state)
         generate_route(game_state)
-    direction = 0
-    if(len(route) > 0):
-        direction = route[0]
-        route = route[1:]
+    
+    if(len(route) == 0):
+        return []
     commands = []
     for aircraft in game_state["aircrafts"]:
         # Go loopy loop
-        if(len(route) == 0 and direction == 0 or direction == 0):
-            break
-        new_dir = normalize_heading(aircraft['direction'] + direction)
+        index = 0
+        for i in range(0, len(route)):
+            if(route[i][-1] == aircraft['id']):
+                index = i
+        if(len(route[index]) <= 1):
+            continue
+        if(route[index][0] == 0):
+            route[index].pop(0)
+            continue
+        new_dir = normalize_heading(aircraft['direction'] + route[index][0])
         commands.append(f"HEAD {aircraft['id']} {new_dir}")
+        route[index].pop(0)
 
     return commands
 
 def generate_route(game_state):
     global route
 
-    box_x_min = -180
-    box_x_max = 180
-    box_y_min = -180
-    box_y_max = 180
-
-
-    best_routes = []
-    destination_x = game_state["airports"][0]["position"]["x"]
-    destination_y = game_state["airports"][0]["position"]["y"]
-    destination_direction = game_state["airports"][0]["direction"]
-    landing_radius = game_state["airports"][0]["landingRadius"]
-    #collision_radius = game_state["aircrafts"][0]["collisionRadius"]
-    speed = game_state["aircrafts"][0]["speed"]
-    start_x = game_state["aircrafts"][0]["position"]["x"]
-    start_y = game_state["aircrafts"][0]["position"]["y"]
-    start_direction = game_state["aircrafts"][0]["direction"]
-    target_x = destination_x + -math.cos(destination_direction) * speed
-    target_y = destination_y + -math.sin(destination_direction) * speed
-
-    total_limit = 450000
-    route_steps_limit = 40
+    total_limit = 100000
+    route_steps_limit = 60
     direction_change_limit = 20
-    best_routes_limit = 20000
+    found_routes_limit = 1000
     best_routes_min = 20
-    best_routes_max_distance = landing_radius
-    best_routes_max_direction_difference = 20    
+    best_routes_max_direction_difference = 20
 
-    c2 = 1
-    found = False
+    # [x_min, y_min, x_max, y_max]
+    boundaries = get_boundaries(game_state["bbox"])
+
+    # [x, y, direction, speed, collision_radius, id, target_x, target_y, target_direction, landing_radius]
+    aircrafts = get_aircrafts_data(game_state)
+
+    # [[score, [airplane1 directions], [airplane2 directions], ...], ...]
+    found_routes = []
+    
+    most_steps = 0
+
     c1 = 1
-    while c1 < total_limit and len(best_routes) <= best_routes_limit:
+    c2 = 1
+    while c1 < total_limit and len(found_routes) <= found_routes_limit:
         if c2 >= 10000:
-            print('Outer: ' + str(c1) + ', Routes ' + str(len(best_routes)))
+            print('Random routes: ' + str(c1) + ', Routes count: ' + str(len(found_routes)) + 
+                ', Most steps: ' + str(most_steps))
             c2 = 1
         else:
             c2 += 1
-        current_route = [0, 0]    
-        x = start_x
-        y = start_y
-        direction = start_direction
-        finish = False
+
+        # [score, [airplane1 directions], [airplane2 directions], ...]
+        current_routes = []
+        for i in range(0, len(aircrafts)):
+            current_routes.append([])
         
-        while len(current_route) < route_steps_limit and not finish:
-            new_direction = get_rand_direction(direction - direction_change_limit, direction + direction_change_limit)
-            new_x = calculate_x(x, new_direction, speed)
-            new_y = calculate_y(y, new_direction, speed)
-            if new_x < box_x_min or new_x > box_x_max or new_y < box_y_min or new_y > box_y_max:
+        blacklist = []
+        success = False
+
+        stop = False
+        i = 0
+        while i < route_steps_limit and not stop:
+            for j in range(0, len(aircrafts)):
+                if j in blacklist:
+                    continue
+                aircraft = aircrafts[j]
+                if(len(current_routes[j]) > 0 and calculate_distance(current_routes[j][-1][0], current_routes[j][-1][1], aircraft[6], aircraft[7]) <= aircraft[9] and
+                    compare_directions(current_routes[j][-1][2], aircraft[8], best_routes_max_direction_difference)):
+                    blacklist.append(j)
+                    continue
+                start_x = 0
+                start_y = 0
+                start_direction = 0
+                if(i == 0):
+                    start_x = aircraft[0]
+                    start_y = aircraft[1]
+                    start_direction = aircraft[2]
+                else:
+                    start_x = current_routes[j][-1][0]
+                    start_y = current_routes[j][-1][1]
+                    start_direction = current_routes[j][-1][2]
+                new_direction = get_rand_direction(start_direction - direction_change_limit, start_direction + direction_change_limit)
+                new_x = calculate_x(start_x, new_direction, aircraft[3])
+                new_y = calculate_y(start_y, new_direction, aircraft[3])
+                if new_x < boundaries[0] or new_x > boundaries[2] or new_y < boundaries[1] or new_y > boundaries[3]:
+                    stop = True
+                    break
+                if(j > 0 and check_collision(new_x, new_y, current_routes, aircrafts, j, blacklist)):
+                    stop = True
+                    break
+                current_routes[j].append([new_x, new_y, new_direction])
+            i += 1
+            if(len(blacklist) == len(aircrafts)):
+                success = True
                 break
-            current_route.append([new_x, new_y])
-            if(calculate_distance(new_x, new_y, target_x, target_y) <= best_routes_max_distance and compare_directions(new_direction, destination_direction, best_routes_max_direction_difference)):
-                current_route[0] = calculate_total_distance(current_route)
-                current_route[1] = len(current_route) - 2
-                best_routes.append(current_route)
-                #if(calculate_distance(new_x, new_y, target_x, target_y) <= landing_radius):
-                    #found = True
-                finish = True
-                break
-            x = new_x
-            y = new_y
-            direction = new_direction
-        if(found):
-            break
         c1 += 1
+        if success:
+            score = i + 1
+            routes = [0]
+            for i in range(0, len(aircrafts)):
+                routes.append([])
+                x = aircrafts[i][0]
+                y = aircrafts[i][1]
+                direction = aircrafts[i][2]
+                for j in range(0, len(current_routes[i])):
+                    actual_direction = calculate_direction(x, y, current_routes[i][j][0], current_routes[i][j][1])
+                    direction_change = get_direction_change(direction, actual_direction)
+                    routes[i + 1].append(direction_change)
+                    if(direction_change != 0):
+                        score += 1
+                    x = current_routes[i][j][0]
+                    y = current_routes[i][j][1]
+                    direction = current_routes[i][j][2]
+                    if(j == len(current_routes[i]) - 1):
+                        direction_change = get_direction_change(direction, aircrafts[i][8])
+                        if(direction_change != 0):
+                            score += 1
+                        routes[i + 1].append(direction_change)
+                        routes[i + 1].append(aircrafts[i][5])
+            routes[0] = score
+            found_routes.append(routes)
+            continue
+        if(most_steps < i):
+            most_steps = i
     
-    if(not found):
-        best_routes.sort(key=lambda x: x[0], reverse=True)
-        if(len(best_routes) == 0):
-            return
+    if(len(found_routes) == 0):
+        print("Most steps: " + str(most_steps))
+        return []
+    found_routes.sort(key=lambda x: x[0])
 
-    x = start_x
-    y = start_y
-    best_route = best_routes[-1]
+    route = found_routes[0][1:]
+    print(route)
 
-    current_direction = start_direction
-    for i in range(2, len(best_route)):
-        new_direction = calculate_direction(x, y, best_route[i][0], best_route[i][1])
-        route_direction = new_direction - current_direction
-        if(route_direction > 180):
-            route_direction -= 360
-        if(route_direction < -180):
-            route_direction += 360
-        route.append(route_direction)
-        x = best_route[i][0]
-        y = best_route[i][1]
-        current_direction = new_direction
 
-    route_direction = destination_direction - current_direction
-    if(route_direction > 180):
-        route_direction -= 360
-    if(route_direction < -180):
-        route_direction += 360
+def get_aircrafts_data(game_state):
+    aircrafts = []
+    for aircraft in game_state["aircrafts"]:
+        temp = [
+            aircraft["position"]["x"],
+            aircraft["position"]["y"],
+            aircraft["direction"],
+            aircraft["speed"],
+            aircraft["collisionRadius"],
+            aircraft["id"]]
+        info = get_target_info(aircraft["destination"], aircraft["speed"], game_state["airports"])
+        for i in range(0, len(info)):
+            temp.append(info[i])
+        aircrafts.append(temp)
+    return aircrafts
 
-    route.append(route_direction)
+def get_target_info(destination, speed, airports):
+    target_info = []
+    for airport in airports:
+        if(airport["name"] == destination):
+            target_x = airport["position"]["x"] + -math.cos(airport["direction"]) * speed
+            target_y = airport["position"]["y"] + -math.sin(airport["direction"]) * speed
+            target_info = [
+                target_x,
+                target_y,
+                airport["direction"],
+                airport["landingRadius"]
+            ]
+    return target_info
 
+def get_boundaries(bbox):
+    boundaries = []
+    for i in range(0, len(bbox)):
+        boundaries.append(bbox[i]["x"])
+        boundaries.append(bbox[i]["y"])
+    return boundaries
 
 def get_rand_direction(min, max):
     direction = random.randint(min, max)
@@ -166,6 +227,14 @@ def get_rand_direction(min, max):
     if(direction > 359):
         direction -= 360
     return direction
+
+def check_collision(x, y, current_routes, aircrafts, aircraft_index, blacklist):
+    for i in range(0, aircraft_index):
+        if(i in blacklist):
+            continue
+        if(calculate_distance(x, y, current_routes[i][-1][0], current_routes[i][-1][1]) <= max(aircrafts[aircraft_index][4], aircrafts[i][4])):
+                return True
+    return False
 
 def calculate_distance(x1, y1, x2, y2):
     return ((x1 - x2)**2 + (y1 - y2)**2)**0.5
@@ -185,11 +254,13 @@ def compare_directions(direction1, direction2, max_difference):
         difference = 359 - difference
     return difference <= max_difference
 
-def calculate_total_distance(route):
-    total_distance = 0
-    for i in range(3, len(route)):
-        total_distance += calculate_distance(route[i][0], route[i][1], route[i - 1][0], route[i - 1][1])
-    return total_distance
+def get_direction_change(current_direction, target_direction):
+    direction_change = target_direction - current_direction
+    if(direction_change > 180):
+        direction_change -= 360
+    if(direction_change < -180):
+        direction_change += 360
+    return direction_change
 
 def main():
     config = dotenv_values()
